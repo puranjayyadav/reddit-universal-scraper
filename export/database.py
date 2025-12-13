@@ -112,6 +112,27 @@ def init_database():
         )
     """)
     
+    # Job history table for observability
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS job_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT UNIQUE,
+            target TEXT,
+            is_user BOOLEAN DEFAULT 0,
+            mode TEXT,
+            status TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            duration_seconds REAL,
+            posts_scraped INTEGER DEFAULT 0,
+            comments_scraped INTEGER DEFAULT 0,
+            media_downloaded INTEGER DEFAULT 0,
+            errors TEXT,
+            error_count INTEGER DEFAULT 0,
+            dry_run BOOLEAN DEFAULT 0
+        )
+    """)
+    
     # Create indexes
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_subreddit ON posts(subreddit)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_utc)")
@@ -385,5 +406,237 @@ def get_all_subreddits():
     conn.close()
     return results
 
+# --- JOB HISTORY FUNCTIONS ---
+
+def start_job_record(target, mode, is_user=False, dry_run=False):
+    """
+    Start tracking a new scrape job.
+    
+    Returns:
+        job_id: Unique identifier for the job
+    """
+    import uuid
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    job_id = str(uuid.uuid4())[:8]
+    started_at = datetime.now().isoformat()
+    
+    cursor.execute("""
+        INSERT INTO job_history (job_id, target, is_user, mode, status, started_at, dry_run)
+        VALUES (?, ?, ?, ?, 'running', ?, ?)
+    """, (job_id, target, is_user, mode, started_at, dry_run))
+    
+    conn.commit()
+    conn.close()
+    
+    print(f"📋 Job started: {job_id}")
+    return job_id
+
+def complete_job_record(job_id, status, posts=0, comments=0, media=0, errors=None):
+    """
+    Complete a job record with results.
+    
+    Args:
+        job_id: Job ID from start_job_record
+        status: 'completed' or 'failed'
+        posts: Number of posts scraped
+        comments: Number of comments scraped
+        media: Number of media files downloaded
+        errors: Error message if failed
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    completed_at = datetime.now().isoformat()
+    
+    # Calculate duration
+    cursor.execute("SELECT started_at FROM job_history WHERE job_id = ?", (job_id,))
+    row = cursor.fetchone()
+    
+    duration = 0
+    error_count = 0
+    if row:
+        started = datetime.fromisoformat(row['started_at'])
+        duration = (datetime.now() - started).total_seconds()
+    
+    if errors:
+        error_count = 1
+    
+    cursor.execute("""
+        UPDATE job_history 
+        SET status = ?, completed_at = ?, duration_seconds = ?,
+            posts_scraped = ?, comments_scraped = ?, media_downloaded = ?,
+            errors = ?, error_count = ?
+        WHERE job_id = ?
+    """, (status, completed_at, duration, posts, comments, media, errors, error_count, job_id))
+    
+    conn.commit()
+    conn.close()
+    
+    if status == 'completed':
+        print(f"✅ Job {job_id} completed: {posts} posts, {comments} comments in {duration:.1f}s")
+    else:
+        print(f"❌ Job {job_id} failed: {errors}")
+
+def get_job_history(limit=50, target=None, status=None):
+    """Get recent job history."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    sql = "SELECT * FROM job_history WHERE 1=1"
+    params = []
+    
+    if target:
+        sql += " AND target = ?"
+        params.append(target)
+    
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    
+    sql += " ORDER BY started_at DESC LIMIT ?"
+    params.append(limit)
+    
+    cursor.execute(sql, params)
+    results = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return results
+
+def get_job_stats():
+    """Get aggregated job statistics."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    stats = {}
+    
+    # Overall counts
+    cursor.execute("""
+        SELECT 
+            COUNT(*) as total_jobs,
+            SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
+            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
+            AVG(duration_seconds) as avg_duration,
+            SUM(posts_scraped) as total_posts,
+            SUM(comments_scraped) as total_comments
+        FROM job_history
+    """)
+    row = cursor.fetchone()
+    if row:
+        stats.update(dict(row))
+    
+    # Recent jobs
+    cursor.execute("""
+        SELECT target, status, duration_seconds, posts_scraped, started_at
+        FROM job_history ORDER BY started_at DESC LIMIT 10
+    """)
+    stats['recent_jobs'] = [dict(row) for row in cursor.fetchall()]
+    
+    conn.close()
+    return stats
+
+def print_job_history(limit=20):
+    """Pretty print job history."""
+    jobs = get_job_history(limit)
+    
+    print("\n📋 Job History")
+    print("-" * 80)
+    print(f"{'ID':<10} {'Target':<15} {'Status':<10} {'Posts':<8} {'Duration':<10} {'Started':<20}")
+    print("-" * 80)
+    
+    for job in jobs:
+        status_icon = "✅" if job['status'] == 'completed' else "❌" if job['status'] == 'failed' else "🔄"
+        duration = f"{job['duration_seconds']:.1f}s" if job['duration_seconds'] else "-"
+        started = job['started_at'][:19] if job['started_at'] else "-"
+        dry = " (dry)" if job['dry_run'] else ""
+        
+        print(f"{status_icon} {job['job_id']:<8} {job['target']:<15} {job['status']:<10} "
+              f"{job['posts_scraped']:<8} {duration:<10} {started}{dry}")
+    
+    print("-" * 80)
+    
+    stats = get_job_stats()
+    success_rate = (stats['completed'] / stats['total_jobs'] * 100) if stats['total_jobs'] else 0
+    print(f"\n📊 Stats: {stats['total_jobs']} jobs | {success_rate:.0f}% success | "
+          f"{stats['total_posts'] or 0} posts total")
+
+# --- SQLITE MAINTENANCE FUNCTIONS ---
+
+def enable_auto_vacuum():
+    """Enable incremental auto-vacuum on SQLite database."""
+    conn = get_connection()
+    try:
+        conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+        conn.execute("PRAGMA incremental_vacuum")
+        conn.commit()
+        print("✅ Auto-vacuum enabled")
+    finally:
+        conn.close()
+
+def vacuum_database():
+    """Run VACUUM to optimize and compact the database."""
+    conn = get_connection()
+    try:
+        print("🔧 Running VACUUM...")
+        conn.execute("VACUUM")
+        print("✅ Database optimized")
+    finally:
+        conn.close()
+
+def backup_database(backup_path=None):
+    """
+    Create a backup of the SQLite database.
+    
+    Args:
+        backup_path: Optional custom backup path
+    
+    Returns:
+        Path to the backup file
+    """
+    import shutil
+    
+    backup_dir = DATA_DIR / "backups"
+    backup_dir.mkdir(exist_ok=True)
+    
+    if backup_path is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = backup_dir / f"reddit_scraper_{timestamp}.db"
+    
+    shutil.copy2(DB_PATH, backup_path)
+    
+    # Get file size
+    size_mb = Path(backup_path).stat().st_size / (1024 * 1024)
+    print(f"✅ Backup created: {backup_path} ({size_mb:.2f} MB)")
+    
+    return str(backup_path)
+
+def get_database_info():
+    """Get database size and table info."""
+    info = {}
+    
+    # File size
+    if DB_PATH.exists():
+        info['size_mb'] = DB_PATH.stat().st_size / (1024 * 1024)
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Table counts
+    tables = ['posts', 'comments', 'job_history', 'alerts', 'subreddits']
+    info['tables'] = {}
+    
+    for table in tables:
+        try:
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            info['tables'][table] = cursor.fetchone()[0]
+        except:
+            info['tables'][table] = 0
+    
+    conn.close()
+    return info
+
 # Initialize on import
 init_database()
+

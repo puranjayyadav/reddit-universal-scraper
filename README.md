@@ -2,21 +2,25 @@
 
 [![Docker Build & Publish](https://github.com/ksanjeev284/reddit-universal-scraper/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/ksanjeev284/reddit-universal-scraper/actions/workflows/docker-publish.yml)
 
-A **full-featured** Reddit scraper suite with analytics dashboard, sentiment analysis, scheduled scraping, notifications, and more!
+A **full-featured** Reddit scraper with analytics dashboard, REST API, scheduled scraping, plugins, and more. **No API keys required!**
 
 ## ✨ Features
 
 | Feature | Description |
 |---------|-------------|
 | 📊 **Full Scraping** | Posts, comments, images, videos, galleries |
-| 📈 **Analytics Dashboard** | Beautiful Streamlit web UI |
+| 📈 **Web Dashboard** | Beautiful Streamlit UI with 7 tabs |
+| 🚀 **REST API** | Connect Metabase, Grafana, DuckDB |
+| 🔌 **Plugin System** | Extensible post-processing (sentiment, dedupe, keywords) |
+| 📋 **Job Tracking** | Full history with status, duration, errors |
+| 🧪 **Dry Run Mode** | Test scrape rules without saving data |
+| 📦 **Parquet Export** | Analytics-ready format for DuckDB/warehouses |
 | 😀 **Sentiment Analysis** | Analyze post/comment sentiment |
-| ☁️ **Keyword Extraction** | Generate word clouds |
-| 🔍 **Search & Filter** | Query scraped data with filters |
 | 📅 **Scheduled Scraping** | Cron-style job scheduling |
 | 📧 **Notifications** | Discord & Telegram alerts |
-| 🗄️ **SQLite Database** | Structured data storage |
-| 📤 **Multiple Exports** | CSV, JSON, Excel |
+| 🗄️ **SQLite Database** | Structured storage with auto-backup |
+
+---
 
 ## 🚀 Quick Start
 
@@ -24,22 +28,25 @@ A **full-featured** Reddit scraper suite with analytics dashboard, sentiment ana
 # Install dependencies
 pip install -r requirements.txt
 
-# Scrape a subreddit (posts + media + comments)
-python main.py delhi --mode full --limit 100
+# Scrape a subreddit
+python main.py python --mode full --limit 100
 
-# Launch analytics dashboard
+# Launch dashboard
 python main.py --dashboard
+# Opens at http://localhost:8501
 ```
 
-## 📖 Usage Guide
+---
 
-### 🔄 Scraping Modes
+## 📖 All Commands
+
+### 🔄 Scraping
 
 ```bash
-# Full scrape with everything
+# Full scrape (posts + media + comments)
 python main.py delhi --mode full --limit 100
 
-# History only (no media/comments - faster)
+# Fast history-only (no media/comments)
 python main.py delhi --mode history --limit 500
 
 # Live monitor (checks every 5 min)
@@ -49,46 +56,95 @@ python main.py delhi --mode monitor
 python main.py spez --user --mode full --limit 50
 
 # Skip media or comments
-python main.py delhi --mode full --no-media --limit 200
-python main.py delhi --mode full --no-comments --limit 200
+python main.py delhi --no-media --limit 200
+python main.py delhi --no-comments --limit 200
 ```
 
-### 📊 Analytics Dashboard
+### 🧪 Dry Run Mode
+
+Test scrape rules without saving any data:
 
 ```bash
-# Launch the web dashboard
-python main.py --dashboard
+python main.py python --mode full --limit 50 --dry-run
+```
 
+Output:
+```
+🧪 DRY RUN MODE - No data will be saved
+🧪 DRY RUN COMPLETE!
+   📊 Would scrape: 100 posts
+   💬 Would scrape: 245 comments
+```
+
+### 🔌 Plugins
+
+Enable post-processing plugins:
+
+```bash
+# List available plugins
+python main.py --list-plugins
+
+# Run with plugins enabled
+python main.py python --mode full --plugins
+```
+
+**Built-in Plugins:**
+| Plugin | Description |
+|--------|-------------|
+| `sentiment_tagger` | Adds sentiment scores to posts |
+| `deduplicator` | Removes duplicate posts |
+| `keyword_extractor` | Extracts top keywords |
+
+Create custom plugins in `plugins/` folder.
+
+### 📊 Dashboard
+
+```bash
+python main.py --dashboard
 # Opens at http://localhost:8501
 ```
 
-**Dashboard Features:**
-- 📈 Post statistics & charts
-- 😀 Sentiment analysis
-- ☁️ Keyword extraction
-- 🔍 Search & filter interface
-- 📤 Export data
+**Dashboard Tabs:**
+- 📊 Overview - Stats & charts
+- 📈 Analytics - Sentiment & keywords
+- 🔍 Search - Query scraped data
+- 💬 Comments - Comment analysis
+- ⚙️ Scraper - Start new scrapes
+- 📋 Job History - View all jobs
+- 🔌 Integrations - API, export, plugins
 
-### 🔍 Search Data
+### 🚀 REST API
 
 ```bash
-# Search all scraped data
-python main.py --search "credit card"
-
-# Search with filters
-python main.py --search "laptop" --min-score 100
-python main.py --search "advice" --author username
-python main.py --search "help" --subreddit delhi
+python main.py --api
+# API at http://localhost:8000
+# Docs at http://localhost:8000/docs
 ```
 
-### 😀 Analytics
+**Endpoints:**
+| Endpoint | Description |
+|----------|-------------|
+| `GET /posts` | List posts with filters |
+| `GET /comments` | List comments |
+| `GET /subreddits` | All scraped subreddits |
+| `GET /jobs` | Job history |
+| `GET /query?sql=...` | Raw SQL queries |
+| `GET /grafana/query` | Grafana time-series |
+
+### 📦 Export & Maintenance
 
 ```bash
-# Run sentiment analysis
-python main.py --analyze delhi --sentiment
+# Export to Parquet (for DuckDB/warehouses)
+python main.py --export-parquet python
 
-# Extract top keywords
-python main.py --analyze delhi --keywords
+# View job history
+python main.py --job-history
+
+# Backup database
+python main.py --backup
+
+# Optimize database
+python main.py --vacuum
 ```
 
 ### 📅 Scheduled Scraping
@@ -97,50 +153,124 @@ python main.py --analyze delhi --keywords
 # Scrape every 60 minutes
 python main.py --schedule delhi --every 60
 
-# Scrape with options
+# With options
 python main.py --schedule delhi --every 30 --mode full --limit 50
 ```
 
-### 📧 Notifications (Discord/Telegram)
+### 🔍 Search & Analytics
 
-**Discord:**
 ```bash
-python main.py delhi --mode monitor --discord-webhook "YOUR_WEBHOOK_URL"
+# Search scraped data
+python main.py --search "credit card" --min-score 100
+
+# Run sentiment analysis
+python main.py --analyze delhi --sentiment
+
+# Extract keywords
+python main.py --analyze delhi --keywords
 ```
 
-**Telegram:**
+---
+
+## 🐳 Docker
+
+### Quick Start
+
 ```bash
-python main.py delhi --mode monitor \
-  --telegram-token "YOUR_BOT_TOKEN" \
-  --telegram-chat "YOUR_CHAT_ID"
+# Build
+docker build -t reddit-scraper .
+
+# Run scrape
+docker run -v ./data:/app/data reddit-scraper python --limit 100
+
+# Run with plugins
+docker run -v ./data:/app/data reddit-scraper python --plugins
 ```
+
+### Docker Compose (Full Stack)
+
+```bash
+# Start API + Dashboard
+docker-compose up -d
+
+# Access:
+# Dashboard: http://localhost:8501
+# API: http://localhost:8000/docs
+```
+
+### Deploy to AWS/VPS
+
+```bash
+# SSH into your server
+ssh user@your-server-ip
+
+# Clone repo
+git clone https://github.com/ksanjeev284/reddit-universal-scraper.git
+cd reddit-universal-scraper
+
+# Start services
+docker-compose up -d
+
+# Open firewall ports
+sudo ufw allow 8000
+sudo ufw allow 8501
+```
+
+Access:
+- `http://your-server-ip:8501` → Dashboard
+- `http://your-server-ip:8000/docs` → API
+
+---
+
+## 🔗 External Integrations
+
+### Metabase
+
+1. Start API: `python main.py --api`
+2. Add HTTP datasource: `http://localhost:8000`
+3. Query: `/posts?subreddit=python&limit=100`
+
+### Grafana
+
+1. Install "JSON API" or "Infinity" plugin
+2. Add datasource: `http://localhost:8000`
+3. Use `/grafana/query` for time-series
+
+### DuckDB
+
+```python
+import duckdb
+
+# Export to Parquet first
+# python main.py --export-parquet python
+
+# Query directly
+duckdb.query("SELECT * FROM 'data/parquet/*.parquet'").df()
+```
+
+---
 
 ## 📁 Project Structure
 
 ```
 reddit-scraper/
-├── main.py              # Main CLI entry point
-├── config.py            # Configuration settings
-├── analytics/           # Sentiment & keyword analysis
-│   └── sentiment.py
-├── alerts/              # Discord & Telegram notifications
-│   └── notifications.py
-├── dashboard/           # Streamlit web UI
-│   └── app.py
-├── export/              # Database & export functions
-│   └── database.py
-├── scheduler/           # Cron-style scheduling
-│   └── cron.py
-├── search/              # Search & filter engine
-│   └── query.py
-└── data/                # Scraped data
-    └── r_subreddit/
-        ├── posts.csv
-        ├── comments.csv
-        └── media/
-            ├── images/
-            └── videos/
+├── main.py              # CLI entry point
+├── config.py            # Settings
+├── analytics/           # Sentiment & keywords
+├── alerts/              # Discord/Telegram
+├── api/                 # REST API server
+├── dashboard/           # Streamlit UI
+├── export/              # Database & exports
+├── plugins/             # Post-processing plugins
+├── scheduler/           # Cron scheduling
+├── search/              # Search engine
+└── data/
+    ├── r_subreddit/     # Scraped data
+    ├── backups/         # DB backups
+    └── parquet/         # Parquet exports
 ```
+
+---
 
 ## 📊 Data Output
 
@@ -154,9 +284,7 @@ reddit-scraper/
 | num_comments | Comment count |
 | post_type | text/image/video/gallery |
 | selftext | Post body |
-| flair | Post flair |
-| is_nsfw | NSFW flag |
-| created_utc | Timestamp |
+| sentiment_score | -1.0 to 1.0 (with plugins) |
 
 ### comments.csv
 | Column | Description |
@@ -166,30 +294,19 @@ reddit-scraper/
 | author | Username |
 | body | Comment text |
 | score | Upvotes |
-| depth | Nesting level |
 
-## 🐳 Docker
+---
 
-```bash
-# Build
-docker build -t reddit-scraper .
-
-# Full scrape
-docker run -v $(pwd)/data:/app/data reddit-scraper delhi --mode full --limit 100
-
-# Monitor mode
-docker run -d -v $(pwd)/data:/app/data reddit-scraper delhi --mode monitor
-```
-
-## ⚙️ Configuration
-
-Edit `config.py` or use environment variables:
+## ⚙️ Environment Variables
 
 ```bash
+# Notifications
 export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
 export TELEGRAM_BOT_TOKEN="123456:ABC..."
 export TELEGRAM_CHAT_ID="987654321"
 ```
+
+---
 
 ## 📜 License
 
