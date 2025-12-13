@@ -11,3 +11,8 @@ streamlit
 
 # Export
 openpyxl
+pyarrow
+
+# REST API
+fastapi
+uvicorn

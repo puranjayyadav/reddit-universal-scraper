@@ -291,15 +291,45 @@ def extract_post_data(post_json):
     }
 
 # --- FULL HISTORY SCRAPE ---
-def run_full_history(target, limit, is_user=False, download_media_flag=True, scrape_comments_flag=True):
-    """Full scrape with images, videos, and comments."""
+def run_full_history(target, limit, is_user=False, download_media_flag=True, 
+                     scrape_comments_flag=True, dry_run=False, use_plugins=False):
+    """
+    Full scrape with images, videos, and comments.
+    
+    Args:
+        target: Subreddit or username
+        limit: Maximum posts to scrape
+        is_user: True if target is a user
+        download_media_flag: Download images/videos
+        scrape_comments_flag: Scrape comments
+        dry_run: Simulate without saving data
+        use_plugins: Run post-processing plugins
+    """
     prefix = "u" if is_user else "r"
-    print(f"🚀 Starting FULL HISTORY scrape for {prefix}/{target}")
+    mode = "full" if download_media_flag and scrape_comments_flag else "history"
+    
+    # Display mode banner
+    if dry_run:
+        print("=" * 50)
+        print("🧪 DRY RUN MODE - No data will be saved")
+        print("=" * 50)
+    
+    print(f"🚀 Starting {'DRY RUN' if dry_run else 'FULL HISTORY'} scrape for {prefix}/{target}")
     print(f"   📊 Target posts: {limit}")
-    print(f"   🖼️  Download media: {download_media_flag}")
+    print(f"   🖼️  Download media: {download_media_flag and not dry_run}")
     print(f"   💬 Scrape comments: {scrape_comments_flag}")
+    print(f"   🔌 Plugins enabled: {use_plugins}")
     print("-" * 50)
     
+    # Start job tracking
+    job_id = None
+    try:
+        from export.database import start_job_record, complete_job_record
+        job_id = start_job_record(target, mode, is_user, dry_run)
+    except Exception as e:
+        print(f"⚠️ Job tracking unavailable: {e}")
+    
+    # Setup directories (even for dry run, to check existing data)
     dirs = setup_directories(target, prefix)
     load_history(dirs["posts"])
     
@@ -307,97 +337,152 @@ def run_full_history(target, limit, is_user=False, download_media_flag=True, scr
     total_posts = 0
     total_media = {"images": 0, "videos": 0}
     total_comments = 0
+    all_scraped_posts = []  # For plugin processing
+    all_scraped_comments = []
     start_time = time.time()
+    error_msg = None
     
-    while total_posts < limit:
-        random.shuffle(MIRRORS)
-        success = False
-        
-        for base_url in MIRRORS:
-            try:
-                if is_user:
-                    path = f"/user/{target}/submitted.json"
-                else:
-                    path = f"/r/{target}/new.json"
-                
-                target_url = f"{base_url}{path}?limit=100&raw_json=1"
-                if after:
-                    target_url += f"&after={after}"
-                
-                print(f"\n📡 Fetching from: {base_url}")
-                response = SESSION.get(target_url, timeout=15)
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    posts = []
-                    all_comments = []
-                    
-                    children = data['data']['children']
-                    print(f"   Found {len(children)} posts in this batch")
-                    
-                    for child in children:
-                        p = child['data']
-                        post = extract_post_data(p)
-                        
-                        if post['permalink'] in SEEN_URLS:
-                            continue
-                        
-                        if download_media_flag:
-                            downloaded = download_post_media(p, dirs, post['id'])
-                            post['media_downloaded'] = downloaded['images'] > 0 or downloaded['videos'] > 0
-                            total_media['images'] += downloaded['images']
-                            total_media['videos'] += downloaded['videos']
-                        
-                        posts.append(post)
-                        
-                        if scrape_comments_flag and post['num_comments'] > 0:
-                            print(f"   💬 Fetching comments for: {post['title'][:40]}...")
-                            comments = scrape_comments(post['permalink'])
-                            all_comments.extend(comments)
-                            total_comments += len(comments)
-                            time.sleep(1)
-                    
-                    saved = save_posts_csv(posts, dirs["posts"])
-                    total_posts += saved
-                    
-                    if all_comments:
-                        save_comments_csv(all_comments, dirs["comments"])
-                    
-                    print(f"\n📊 Progress: {total_posts}/{limit} posts")
-                    print(f"   🖼️  Images: {total_media['images']} | 🎬 Videos: {total_media['videos']}")
-                    print(f"   💬 Comments: {total_comments}")
-                    
-                    after = data['data'].get('after')
-                    if not after:
-                        print("\n🏁 Reached end of available history.")
-                        break
-                    
-                    success = True
-                    break
-                    
-            except Exception as e:
-                print(f"   ⚠️ Error with {base_url}: {e}")
-                continue
-        
-        if not after:
-            break
+    try:
+        while total_posts < limit:
+            random.shuffle(MIRRORS)
+            success = False
             
-        if not success:
-            print("\n❌ All sources failed. Waiting 30s...")
-            time.sleep(30)
-        else:
-            print(f"\n⏸️ Cooling down (3s)...")
-            time.sleep(3)
+            for base_url in MIRRORS:
+                try:
+                    if is_user:
+                        path = f"/user/{target}/submitted.json"
+                    else:
+                        path = f"/r/{target}/new.json"
+                    
+                    target_url = f"{base_url}{path}?limit=100&raw_json=1"
+                    if after:
+                        target_url += f"&after={after}"
+                    
+                    print(f"\n📡 Fetching from: {base_url}")
+                    response = SESSION.get(target_url, timeout=15)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        posts = []
+                        batch_comments = []
+                        
+                        children = data['data']['children']
+                        print(f"   Found {len(children)} posts in this batch")
+                        
+                        for child in children:
+                            p = child['data']
+                            post = extract_post_data(p)
+                            
+                            if post['permalink'] in SEEN_URLS:
+                                continue
+                            
+                            # Download media (skip in dry run)
+                            if download_media_flag and not dry_run:
+                                downloaded = download_post_media(p, dirs, post['id'])
+                                post['media_downloaded'] = downloaded['images'] > 0 or downloaded['videos'] > 0
+                                total_media['images'] += downloaded['images']
+                                total_media['videos'] += downloaded['videos']
+                            
+                            posts.append(post)
+                            
+                            # Scrape comments
+                            if scrape_comments_flag and post['num_comments'] > 0:
+                                print(f"   💬 Fetching comments for: {post['title'][:40]}...")
+                                comments = scrape_comments(post['permalink'])
+                                batch_comments.extend(comments)
+                                total_comments += len(comments)
+                                time.sleep(1)
+                        
+                        # Collect for plugins
+                        all_scraped_posts.extend(posts)
+                        all_scraped_comments.extend(batch_comments)
+                        
+                        # Save data (skip in dry run)
+                        if not dry_run:
+                            saved = save_posts_csv(posts, dirs["posts"])
+                            total_posts += saved
+                            
+                            if batch_comments:
+                                save_comments_csv(batch_comments, dirs["comments"])
+                        else:
+                            # In dry run, just count
+                            total_posts += len(posts)
+                            print(f"   🧪 [DRY RUN] Would save {len(posts)} posts")
+                        
+                        print(f"\n📊 Progress: {total_posts}/{limit} posts")
+                        print(f"   🖼️  Images: {total_media['images']} | 🎬 Videos: {total_media['videos']}")
+                        print(f"   💬 Comments: {total_comments}")
+                        
+                        after = data['data'].get('after')
+                        if not after:
+                            print("\n🏁 Reached end of available history.")
+                            break
+                        
+                        success = True
+                        break
+                        
+                except Exception as e:
+                    print(f"   ⚠️ Error with {base_url}: {e}")
+                    continue
+            
+            if not after:
+                break
+                
+            if not success:
+                print("\n❌ All sources failed. Waiting 30s...")
+                time.sleep(30)
+            else:
+                print(f"\n⏸️ Cooling down (3s)...")
+                time.sleep(3)
+        
+        # Run plugins on collected data
+        if use_plugins and (all_scraped_posts or all_scraped_comments):
+            print("\n🔌 Running post-processing plugins...")
+            try:
+                from plugins import load_plugins, run_plugins
+                plugins = load_plugins()
+                if plugins:
+                    all_scraped_posts, all_scraped_comments = run_plugins(
+                        all_scraped_posts, all_scraped_comments, plugins
+                    )
+                    print(f"   ✅ Processed {len(all_scraped_posts)} posts with {len(plugins)} plugins")
+                else:
+                    print("   ⚠️ No plugins found")
+            except Exception as e:
+                print(f"   ⚠️ Plugin error: {e}")
+    
+    except Exception as e:
+        error_msg = str(e)
+        print(f"\n❌ Scrape error: {e}")
     
     duration = time.time() - start_time
     
+    # Complete job tracking
+    if job_id:
+        try:
+            status = 'failed' if error_msg else 'completed'
+            complete_job_record(
+                job_id, status, 
+                total_posts, total_comments, 
+                total_media['images'] + total_media['videos'],
+                error_msg
+            )
+        except Exception as e:
+            print(f"⚠️ Failed to complete job record: {e}")
+    
+    # Summary
     print("\n" + "=" * 50)
-    print("✅ SCRAPE COMPLETE!")
-    print(f"   📁 Data saved to: {dirs['base']}")
-    print(f"   📊 Total posts: {total_posts}")
-    print(f"   🖼️  Total images: {total_media['images']}")
-    print(f"   🎬 Total videos: {total_media['videos']}")
-    print(f"   💬 Total comments: {total_comments}")
+    if dry_run:
+        print("🧪 DRY RUN COMPLETE!")
+        print(f"   📊 Would scrape: {total_posts} posts")
+        print(f"   💬 Would scrape: {total_comments} comments")
+    else:
+        print("✅ SCRAPE COMPLETE!")
+        print(f"   📁 Data saved to: {dirs['base']}")
+        print(f"   📊 Total posts: {total_posts}")
+        print(f"   🖼️  Total images: {total_media['images']}")
+        print(f"   🎬 Total videos: {total_media['videos']}")
+        print(f"   💬 Total comments: {total_comments}")
     print(f"   ⏱️  Duration: {duration:.1f}s")
     
     return {
@@ -405,7 +490,9 @@ def run_full_history(target, limit, is_user=False, download_media_flag=True, scr
         'images': total_media['images'],
         'videos': total_media['videos'],
         'comments': total_comments,
-        'duration': f"{duration:.1f}s"
+        'duration': f"{duration:.1f}s",
+        'dry_run': dry_run,
+        'job_id': job_id
     }
 
 # --- MONITOR MODE ---
@@ -470,6 +557,8 @@ Commands:
     python main.py <target> --mode full --limit 100
     python main.py <target> --mode history --limit 500
     python main.py <target> --mode monitor
+    python main.py <target> --dry-run           # Test without saving
+    python main.py <target> --plugins           # Enable post-processing
     
   SEARCH:
     python main.py --search "keyword" --subreddit delhi
@@ -484,6 +573,16 @@ Commands:
   ANALYTICS:
     python main.py --analyze delhi --sentiment
     python main.py --analyze delhi --keywords
+    
+  MAINTENANCE:
+    python main.py --job-history                # View job history
+    python main.py --backup                     # Backup database
+    python main.py --vacuum                     # Optimize database
+    python main.py --export-parquet python      # Export to Parquet
+    python main.py --list-plugins               # List available plugins
+    
+  REST API:
+    python main.py --api                        # Start REST API server
         """
     )
     
@@ -519,6 +618,16 @@ Commands:
     parser.add_argument("--telegram-token", type=str, help="Telegram bot token")
     parser.add_argument("--telegram-chat", type=str, help="Telegram chat ID")
     
+    # New: Observability & Maintenance
+    parser.add_argument("--dry-run", action="store_true", help="Simulate scrape without saving data")
+    parser.add_argument("--plugins", action="store_true", help="Enable post-processing plugins")
+    parser.add_argument("--list-plugins", action="store_true", help="List available plugins")
+    parser.add_argument("--job-history", action="store_true", help="View job history")
+    parser.add_argument("--backup", action="store_true", help="Backup SQLite database")
+    parser.add_argument("--vacuum", action="store_true", help="Optimize SQLite database")
+    parser.add_argument("--export-parquet", type=str, help="Export subreddit to Parquet format")
+    parser.add_argument("--api", action="store_true", help="Start REST API server (port 8000)")
+    
     args = parser.parse_args()
     
     print("=" * 50)
@@ -530,6 +639,52 @@ Commands:
         print("\n🌐 Launching Dashboard...")
         print("   Open: http://localhost:8501")
         os.system("streamlit run dashboard/app.py")
+        return
+    
+    # REST API mode
+    if args.api:
+        print("\n🚀 Starting REST API server...")
+        print("   📖 Docs: http://localhost:8000/docs")
+        print("   📊 Connect Metabase/Grafana to http://localhost:8000")
+        try:
+            import uvicorn
+            from api.server import app
+            uvicorn.run(app, host="0.0.0.0", port=8000)
+        except ImportError:
+            print("❌ Install dependencies: pip install fastapi uvicorn")
+        return
+    
+    # --- NEW: Maintenance & Observability Commands ---
+    
+    # Job history
+    if args.job_history:
+        from export.database import print_job_history
+        print_job_history()
+        return
+    
+    # Backup database
+    if args.backup:
+        from export.database import backup_database
+        backup_database()
+        return
+    
+    # Vacuum/optimize database
+    if args.vacuum:
+        from export.database import vacuum_database
+        vacuum_database()
+        return
+    
+    # Export to Parquet
+    if args.export_parquet:
+        from export.parquet import export_to_parquet
+        prefix = "u" if args.user else "r"
+        export_to_parquet(args.export_parquet, prefix=prefix)
+        return
+    
+    # List plugins
+    if args.list_plugins:
+        from plugins import list_plugins
+        list_plugins()
         return
     
     # Search mode
@@ -607,11 +762,13 @@ Commands:
             time.sleep(300)
     elif args.mode == "history":
         run_full_history(args.target, args.limit, args.user, 
-                        download_media_flag=False, scrape_comments_flag=False)
+                        download_media_flag=False, scrape_comments_flag=False,
+                        dry_run=args.dry_run, use_plugins=args.plugins)
     else:
         run_full_history(args.target, args.limit, args.user,
                         download_media_flag=not args.no_media,
-                        scrape_comments_flag=not args.no_comments)
+                        scrape_comments_flag=not args.no_comments,
+                        dry_run=args.dry_run, use_plugins=args.plugins)
 
 if __name__ == "__main__":
     main()

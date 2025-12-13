@@ -115,8 +115,8 @@ def main():
     comments_df = data.get('comments', pd.DataFrame())
     
     # Main content tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Overview", "📈 Analytics", "🔍 Search", "💬 Comments", "⚙️ Scraper"
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📊 Overview", "📈 Analytics", "🔍 Search", "💬 Comments", "⚙️ Scraper", "📋 Job History", "🔌 Integrations"
     ])
     
     with tab1:
@@ -359,6 +359,242 @@ def main():
                     f"{selected_sub}_posts.json",
                     "application/json"
                 )
+    
+    with tab6:
+        st.header("📋 Job History")
+        
+        try:
+            from export.database import get_job_history, get_job_stats
+            
+            # Job stats
+            stats = get_job_stats()
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Total Jobs", stats.get('total_jobs', 0))
+            with col2:
+                st.metric("Completed", stats.get('completed', 0))
+            with col3:
+                st.metric("Failed", stats.get('failed', 0))
+            with col4:
+                avg_dur = stats.get('avg_duration')
+                st.metric("Avg Duration", f"{avg_dur:.1f}s" if avg_dur else "-")
+            
+            st.divider()
+            
+            # Job history table
+            st.subheader("Recent Jobs")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                filter_status = st.selectbox("Filter by Status", ['All', 'completed', 'failed', 'running'])
+            with col2:
+                limit = st.number_input("Show last N jobs", min_value=10, max_value=100, value=20)
+            
+            status_filter = None if filter_status == 'All' else filter_status
+            jobs = get_job_history(limit=limit, status=status_filter)
+            
+            if jobs:
+                jobs_df = pd.DataFrame(jobs)
+                # Format for display
+                display_cols = ['job_id', 'target', 'mode', 'status', 'posts_scraped', 
+                               'comments_scraped', 'duration_seconds', 'started_at', 'dry_run']
+                display_cols = [c for c in display_cols if c in jobs_df.columns]
+                st.dataframe(jobs_df[display_cols], use_container_width=True)
+                
+                # Success rate chart
+                st.subheader("Success Rate")
+                if 'status' in jobs_df.columns:
+                    status_counts = jobs_df['status'].value_counts()
+                    st.bar_chart(status_counts)
+            else:
+                st.info("No job history found. Run some scrapes first!")
+        
+        except Exception as e:
+            st.error(f"Failed to load job history: {e}")
+            st.info("Make sure the database is initialized.")
+    
+    with tab7:
+        st.header("🔌 Integrations & Settings")
+        
+        # REST API Section
+        st.subheader("🚀 REST API")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("""
+            **Start the API server:**
+            ```bash
+            python main.py --api
+            ```
+            """)
+        with col2:
+            api_port = st.number_input("API Port", value=8000, min_value=1000, max_value=65535)
+            st.code(f"http://localhost:{api_port}/docs")
+        
+        st.markdown("""
+        **Available Endpoints:**
+        | Endpoint | Description |
+        |----------|-------------|
+        | `/posts` | List posts with filters |
+        | `/comments` | List comments |
+        | `/subreddits` | All scraped subreddits |
+        | `/jobs` | Job history |
+        | `/query?sql=...` | Raw SQL queries |
+        | `/docs` | Interactive Swagger UI |
+        """)
+        
+        st.divider()
+        
+        # External Tools
+        st.subheader("📊 External Tools Integration")
+        
+        tool_tabs = st.tabs(["📈 Metabase", "📊 Grafana", "🔗 DreamFactory", "🧦 DuckDB"])
+        
+        with tool_tabs[0]:
+            st.markdown("""
+            **Metabase Setup:**
+            1. Start API: `python main.py --api`
+            2. In Metabase: New Question → Native Query
+            3. Use HTTP datasource with `http://localhost:8000`
+            4. Query: `/posts?subreddit=python&limit=100`
+            
+            **Or use raw SQL:**
+            ```
+            /query?sql=SELECT title, score FROM posts ORDER BY score DESC
+            ```
+            """)
+        
+        with tool_tabs[1]:
+            st.markdown("""
+            **Grafana Setup:**
+            1. Install "JSON API" or "Infinity" plugin
+            2. Add datasource: `http://localhost:8000`
+            3. Use `/grafana/query` for time-series
+            
+            **Example Panel Query:**
+            ```sql
+            SELECT date(created_utc) as time, COUNT(*) as posts 
+            FROM posts GROUP BY date(created_utc)
+            ```
+            """)
+        
+        with tool_tabs[2]:
+            st.markdown("""
+            **DreamFactory Setup:**
+            1. Point to SQLite file: `data/reddit_scraper.db`
+            2. Or use REST API: `http://localhost:8000`
+            3. Auto-generates API for all tables
+            """)
+        
+        with tool_tabs[3]:
+            st.markdown("""
+            **DuckDB (Analytics):**
+            1. Export to Parquet first (see below)
+            2. Query directly:
+            ```python
+            import duckdb
+            duckdb.query("SELECT * FROM 'data/parquet/*.parquet'").df()
+            ```
+            """)
+        
+        st.divider()
+        
+        # Parquet Export
+        st.subheader("📦 Parquet Export")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            export_sub = st.selectbox("Select subreddit to export", subreddits, key="parquet_export")
+        with col2:
+            if st.button("📦 Export to Parquet"):
+                st.info(f"Run: `python main.py --export-parquet {export_sub.replace('r_', '').replace('u_', '')}`")
+        
+        # List existing parquet files
+        from pathlib import Path
+        parquet_dir = Path("data/parquet")
+        if parquet_dir.exists():
+            parquet_files = list(parquet_dir.glob("*.parquet"))
+            if parquet_files:
+                st.write("**Existing Parquet files:**")
+                for f in parquet_files[:10]:
+                    size_mb = f.stat().st_size / (1024 * 1024)
+                    st.text(f"  • {f.name} ({size_mb:.2f} MB)")
+        
+        st.divider()
+        
+        # Database Maintenance
+        st.subheader("🛠️ Database Maintenance")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("💾 Backup Database"):
+                st.info("Run: `python main.py --backup`")
+        
+        with col2:
+            if st.button("🧹 Vacuum/Optimize"):
+                st.info("Run: `python main.py --vacuum`")
+        
+        with col3:
+            try:
+                from export.database import get_database_info
+                db_info = get_database_info()
+                st.metric("DB Size", f"{db_info.get('size_mb', 0):.2f} MB")
+            except:
+                st.metric("DB Size", "N/A")
+        
+        # Show backup files
+        backup_dir = Path("data/backups")
+        if backup_dir.exists():
+            backups = sorted(backup_dir.glob("*.db"), reverse=True)[:5]
+            if backups:
+                st.write("**Recent Backups:**")
+                for b in backups:
+                    size_mb = b.stat().st_size / (1024 * 1024)
+                    st.text(f"  • {b.name} ({size_mb:.2f} MB)")
+        
+        st.divider()
+        
+        # Plugin Configuration
+        st.subheader("🔌 Plugins")
+        
+        try:
+            from plugins import load_plugins
+            plugins = load_plugins()
+            
+            if plugins:
+                st.write("**Available Plugins:**")
+                for plugin in plugins:
+                    status = "✅" if plugin.enabled else "❌"
+                    st.markdown(f"{status} **{plugin.name}** - {plugin.description}")
+                
+                st.info("💡 Enable plugins when scraping: `python main.py <target> --plugins`")
+            else:
+                st.warning("No plugins found in plugins/ directory")
+        except Exception as e:
+            st.error(f"Plugin loading error: {e}")
+        
+        st.divider()
+        
+        # Quick Commands Reference
+        st.subheader("📋 Quick Commands")
+        st.code("""
+# Start REST API
+python main.py --api
+
+# Export to Parquet
+python main.py --export-parquet <subreddit>
+
+# Backup database
+python main.py --backup
+
+# Scrape with plugins
+python main.py <target> --plugins
+
+# Dry run (test without saving)
+python main.py <target> --dry-run
+        """, language="bash")
 
 if __name__ == "__main__":
     main()
