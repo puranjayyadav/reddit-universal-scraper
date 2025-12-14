@@ -79,13 +79,15 @@ def get_available_data():
     
     if data_dir.exists():
         for sub_dir in data_dir.iterdir():
-            if sub_dir.is_dir() and (sub_dir / 'posts.csv').exists():
+            if sub_dir.is_dir():
+                # Check for r_ or u_ prefix (standard scraper format)
+                # We allow folders even without posts.csv so users can see empty scrapes
                 if sub_dir.name.startswith('u_'):
                     data['users'].append(sub_dir.name)
                 elif sub_dir.name.startswith('r_'):
                     data['subreddits'].append(sub_dir.name)
-                else:
-                    # Fallback for old/other folders, treat as subreddit
+                elif (sub_dir / 'posts.csv').exists():
+                    # Fallback for old/other folders that have data
                     data['subreddits'].append(sub_dir.name)
     
     # Sort lists
@@ -389,6 +391,27 @@ def main():
         # Check for active job
         active_job = get_active_job()
         
+        # Auto-detect if process is dead
+        if active_job:
+            try:
+                import psutil
+                if not psutil.pid_exists(active_job['pid']):
+                    # Process is dead
+                    if JOB_FILE.exists():
+                        JOB_FILE.unlink()
+                    active_job = None
+                    st.rerun()
+            except ImportError:
+                # Fallback for systems without psutil
+                try:
+                    os.kill(active_job['pid'], 0)
+                except OSError:
+                    # PID doesn't exist (Process dead)
+                    if JOB_FILE.exists():
+                        JOB_FILE.unlink()
+                    active_job = None
+                    st.rerun()
+        
         # Monitor Section (Always visible if job exists)
         if active_job:
             st.info(f"🔄 **Scraping in Progress**: {active_job.get('target', 'Unknown')} (PID: {active_job.get('pid')})")
@@ -396,6 +419,7 @@ def main():
             # Stop button
             if st.button("🛑 Stop Scraping"):
                 try:
+                    import signal
                     os.kill(active_job['pid'], signal.SIGTERM)
                     st.warning("Stopped process.")
                 except:
