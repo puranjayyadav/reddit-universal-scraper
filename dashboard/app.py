@@ -356,35 +356,63 @@ def main():
                     lines = f.readlines()
                 
                 # Parse metrics from lines
-                posts_count = 0
+                posts_saved = 0
                 comments_count = 0
                 images_count = 0
                 videos_count = 0
+                found_posts = 0
+                processed_posts = 0
                 
                 for line in lines:
                     import re
-                    # Progress: X/Y
+                    # Progress: X/Y (Saved posts)
                     m = re.search(r'Progress: (\d+)/(\d+)', line)
-                    if m: posts_count = int(m.group(1))
+                    if m: posts_saved = int(m.group(1))
                     
                     # Saved X posts
                     m = re.search(r'Saved (\d+)', line)
-                    if m: posts_count += int(m.group(1))
+                    if m: posts_saved += int(m.group(1))
                     
-                    # Comments: X
+                    # Found X posts
+                    m = re.search(r'Found (\d+) posts', line)
+                    if m: found_posts += int(m.group(1))
+                    
+                    # Processed posts (Fetching comments)
+                    if "Fetching comments for:" in line: 
+                        processed_posts += 1
+                    
+                    # Comments: X (Summary)
                     m = re.search(r'Comments:\s*(\d+)', line)
-                    if m: comments_count = int(m.group(1))
-                    if "Fetching comments for:" in line: comments_count += 1
+                    if m: 
+                        comments_count = int(m.group(1))
+                    else:
+                        # Incremental comments
+                        m = re.search(r'\+ Scraped (\d+) comments', line)
+                        if m: comments_count += int(m.group(1))
                     
-                    # Images/Videos
-                    m = re.search(r'Images:\s*(\d+)', line)
-                    if m: images_count = int(m.group(1))
-                    m = re.search(r'Videos:\s*(\d+)', line)
-                    if m: videos_count = int(m.group(1))
+                    # Images/Videos (Summary line)
+                    m = re.search(r'Images:\s*(\d+).*Videos:\s*(\d+)', line)
+                    if m:
+                        images_count = int(m.group(1))
+                        videos_count = int(m.group(2))
+                    
+                    # Images/Videos (Real-time line)
+                    m = re.search(r'\+ Downloaded: (\d+) images, (\d+) videos', line)
+                    if m:
+                        images_count += int(m.group(1))
+                        videos_count += int(m.group(2))
 
                 # Display Metrics
                 col1, col2, col3, col4 = st.columns(4)
-                col1.metric("📊 Posts", posts_count)
+                
+                # Posts Metric Logic
+                if posts_saved > 0:
+                     col1.metric("📊 Posts", f"{posts_saved} (Found {found_posts})")
+                elif found_posts > 0:
+                     col1.metric("📊 Posts", f"Processing: {processed_posts}/{found_posts}")
+                else:
+                     col1.metric("📊 Posts", "0")
+                
                 col2.metric("💬 Comments", comments_count)
                 col3.metric("🖼️ Images", images_count)
                 col4.metric("🎬 Videos", videos_count)

@@ -313,6 +313,9 @@ def scrape_comments(permalink, max_depth=3):
     except Exception as e:
         pass
     
+    if len(comments) > 0:
+        print(f"   + Scraped {len(comments)} comments")
+    
     return comments
 
 def parse_comments(comment_list, post_permalink, depth=0, max_depth=3):
@@ -481,6 +484,9 @@ def run_full_history(target, limit, is_user=False, download_media_flag=True,
                                 post['media_downloaded'] = downloaded['images'] > 0 or downloaded['videos'] > 0
                                 total_media['images'] += downloaded['images']
                                 total_media['videos'] += downloaded['videos']
+                                
+                                if downloaded['images'] > 0 or downloaded['videos'] > 0:
+                                    print(f"   + Downloaded: {downloaded['images']} images, {downloaded['videos']} videos")
                             
                             posts.append(post)
                             
