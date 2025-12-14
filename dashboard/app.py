@@ -126,226 +126,247 @@ def main():
         empty_msg = "No scraped subreddits found."
         icon = "📁"
     
+    selected_sub = None
+    
     if not options:
         st.sidebar.warning(empty_msg)
         if source_type == "Subreddits":
-            st.sidebar.code("python main.py <sub_name> ...")
+            st.sidebar.info("Go to '⚙️ Scraper' tab to start scraping.")
         else:
-            st.sidebar.code("python main.py <user> --user ...")
-        return # Stop execution if no data for selected type
+            st.sidebar.info("Go to '⚙️ Scraper' tab to start scraping users.")
+    else:
+        # Selector
+        selected_sub = st.sidebar.selectbox(
+            f"Select {source_type[:-1]}", # "Select Subreddit" or "Select User"
+            options,
+            format_func=lambda x: f"{icon} {x[2:] if x.startswith(('r_', 'u_')) else x}"
+        )
     
-    # Selector
-    selected_sub = st.sidebar.selectbox(
-        f"Select {source_type[:-1]}", # "Select Subreddit" or "Select User"
-        options,
-        format_func=lambda x: f"{icon} {x[2:] if x.startswith(('r_', 'u_')) else x}"
-    )
+    # Load data if selected
+    posts_df = pd.DataFrame()
+    comments_df = pd.DataFrame()
+    data_loaded = False
     
-    # Load data
-    data_dir = Path(__file__).parent.parent / 'data'
-    sub_path = data_dir / selected_sub
-    data = load_subreddit_data(sub_path)
-    
-    if 'posts' not in data:
-        st.error("No posts data found!")
-        return
-    
-    posts_df = data['posts']
-    comments_df = data.get('comments', pd.DataFrame())
-    
-    # Main content tabs
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-        "📊 Overview", "📈 Analytics", "🔍 Search", "💬 Comments", "⚙️ Scraper", "📋 Job History", "🔌 Integrations"
-    ])
-    
-    with tab1:
-        st.header(f"📊 Overview: {selected_sub}")
+    if selected_sub:
+        data_dir = Path(__file__).parent.parent / 'data'
+        sub_path = data_dir / selected_sub
+        data = load_subreddit_data(sub_path)
         
-        # Metrics row
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric("Total Posts", len(posts_df))
-        with col2:
-            st.metric("Total Comments", len(comments_df))
-        with col3:
-            total_score = posts_df['score'].sum() if 'score' in posts_df else 0
-            st.metric("Total Score", f"{total_score:,}")
-        with col4:
-            avg_score = posts_df['score'].mean() if 'score' in posts_df else 0
-            st.metric("Avg Score", f"{avg_score:.1f}")
-        with col5:
-            media_count = posts_df['has_media'].sum() if 'has_media' in posts_df else 0
-            st.metric("Media Posts", int(media_count))
-        
-        st.divider()
-        
-        # Post type distribution
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("📝 Post Types")
-            if 'post_type' in posts_df:
-                type_counts = posts_df['post_type'].value_counts()
-                st.bar_chart(type_counts)
-        
-        with col2:
-            st.subheader("📅 Posts Over Time")
-            if 'created_utc' in posts_df:
-                posts_df['date'] = pd.to_datetime(posts_df['created_utc']).dt.date
-                daily = posts_df.groupby('date').size()
-                st.line_chart(daily)
-        
-        st.divider()
-        
-        # Top posts
-        st.subheader("🔥 Top Posts by Score")
-        if 'score' in posts_df:
-            top_posts = posts_df.nlargest(10, 'score')[['title', 'score', 'num_comments', 'post_type', 'created_utc']]
-            st.dataframe(top_posts)
-    
-    with tab2:
-        st.header("📈 Analytics")
-        
-        # Sentiment Analysis
-        st.subheader("😀 Sentiment Analysis")
-        
-        if st.button("Run Sentiment Analysis"):
-            with st.spinner("Analyzing sentiment..."):
-                posts_list = posts_df.to_dict('records')
-                analyzed_posts, sentiment_counts = analyze_posts_sentiment(posts_list)
-                
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Positive", sentiment_counts['positive'], delta=None)
-                col2.metric("Neutral", sentiment_counts['neutral'], delta=None)
-                col3.metric("Negative", sentiment_counts['negative'], delta=None)
-                
-                # Pie chart
-                sentiment_df = pd.DataFrame({
-                    'Sentiment': ['Positive', 'Neutral', 'Negative'],
-                    'Count': [sentiment_counts['positive'], sentiment_counts['neutral'], sentiment_counts['negative']]
-                })
-                st.bar_chart(sentiment_df.set_index('Sentiment'))
-        
-        st.divider()
-        
-        # Keywords
-        st.subheader("☁️ Top Keywords")
-        texts = posts_df['title'].tolist()
-        if 'selftext' in posts_df:
-            texts.extend(posts_df['selftext'].dropna().tolist())
-        
-        keywords = extract_keywords(texts, top_n=30)
-        
-        if keywords:
-            kw_df = pd.DataFrame(keywords, columns=['Word', 'Count'])
-            st.bar_chart(kw_df.set_index('Word').head(20))
-        
-        st.divider()
-        
-        # Best posting times
-        st.subheader("⏰ Best Posting Times")
-        
-        if 'created_utc' in posts_df:
-            timing_data = find_best_posting_times(posts_df.to_dict('records'))
-            
-            if timing_data['best_hours']:
-                st.write("**Best Hours to Post:**")
-                for hour, avg_score in timing_data['best_hours']:
-                    st.write(f"• {hour}:00 - Avg Score: {avg_score:.1f}")
-            
-            if timing_data['best_days']:
-                st.write("**Best Days to Post:**")
-                for day, avg_score in timing_data['best_days']:
-                    st.write(f"• {day} - Avg Score: {avg_score:.1f}")
-    
-    with tab3:
-        st.header("🔍 Search Posts")
-        
-        # Search form
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            search_query = st.text_input("Search query", placeholder="Enter keywords...")
-        
-        with col2:
-            min_score = st.number_input("Min Score", min_value=0, value=0)
-        
-        col3, col4, col5 = st.columns(3)
-        
-        with col3:
-            if 'post_type' in posts_df:
-                post_types = ['All'] + posts_df['post_type'].dropna().unique().tolist()
-                selected_type = st.selectbox("Post Type", post_types)
-        
-        with col4:
-            if 'author' in posts_df:
-                authors = ['All'] + posts_df['author'].dropna().unique().tolist()[:50]
-                selected_author = st.selectbox("Author", authors)
-        
-        with col5:
-            sort_by = st.selectbox("Sort by", ['score', 'num_comments', 'created_utc'])
-        
-        # Search button
-        if st.button("🔍 Search"):
-            filtered = posts_df.copy()
-            
-            if search_query:
-                mask = filtered['title'].str.contains(search_query, case=False, na=False)
-                if 'selftext' in filtered:
-                    mask |= filtered['selftext'].str.contains(search_query, case=False, na=False)
-                filtered = filtered[mask]
-            
-            if min_score > 0:
-                filtered = filtered[filtered['score'] >= min_score]
-            
-            if selected_type != 'All' and 'post_type' in filtered:
-                filtered = filtered[filtered['post_type'] == selected_type]
-            
-            if selected_author != 'All' and 'author' in filtered:
-                filtered = filtered[filtered['author'] == selected_author]
-            
-            filtered = filtered.sort_values(sort_by, ascending=False)
-            
-            st.write(f"Found {len(filtered)} results")
-            st.dataframe(filtered[['title', 'score', 'num_comments', 'post_type', 'author', 'created_utc']].head(50))
-    
-    with tab4:
-        st.header("💬 Comments Analysis")
-        
-        if len(comments_df) == 0:
-            st.warning("No comments data found for this subreddit")
+        if 'posts' in data:
+            posts_df = data['posts']
+            comments_df = data.get('comments', pd.DataFrame())
+            data_loaded = True
         else:
-            col1, col2, col3 = st.columns(3)
+            st.error("No posts data found for selected item!")
+    
+    # Define Tabs
+    # Data tabs only if data loaded
+    tab_list = []
+    if data_loaded:
+        tab_list.extend(["📊 Overview", "📈 Analytics", "🔍 Search", "💬 Comments"])
+    
+    # Always present tabs
+    tab_list.extend(["⚙️ Scraper", "📋 Job History", "🔌 Integrations"])
+    
+    # Create tabs
+    tabs = st.tabs(tab_list)
+    
+    # Map tabs to variables for easy access
+    tab_map = {name: tabs[i] for i, name in enumerate(tab_list)}
+    
+    # --- RENDER TABS ---
+    
+    if data_loaded:
+        with tab_map["📊 Overview"]:
+            st.header(f"📊 Overview: {selected_sub}")
+            
+            # Metrics row
+            col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:
-                st.metric("Total Comments", len(comments_df))
+                st.metric("Total Posts", len(posts_df))
             with col2:
-                avg_score = comments_df['score'].mean() if 'score' in comments_df else 0
-                st.metric("Avg Score", f"{avg_score:.1f}")
+                st.metric("Total Comments", len(comments_df))
             with col3:
-                unique_authors = comments_df['author'].nunique() if 'author' in comments_df else 0
-                st.metric("Unique Commenters", unique_authors)
+                total_score = posts_df['score'].sum() if 'score' in posts_df else 0
+                st.metric("Total Score", f"{total_score:,}")
+            with col4:
+                avg_score = posts_df['score'].mean() if 'score' in posts_df else 0
+                st.metric("Avg Score", f"{avg_score:.1f}")
+            with col5:
+                media_count = posts_df['has_media'].sum() if 'has_media' in posts_df else 0
+                st.metric("Media Posts", int(media_count))
             
             st.divider()
             
-            # Top comments
-            st.subheader("🔥 Top Comments by Score")
-            if 'score' in comments_df:
-                top_comments = comments_df.nlargest(10, 'score')[['body', 'score', 'author', 'created_utc']]
-                for _, row in top_comments.iterrows():
-                    with st.expander(f"⬆️ {row['score']} - by u/{row['author']}"):
-                        st.write(row['body'][:500])
+            # Post type distribution
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("📝 Post Types")
+                if 'post_type' in posts_df:
+                    type_counts = posts_df['post_type'].value_counts()
+                    st.bar_chart(type_counts)
+            
+            with col2:
+                st.subheader("📅 Posts Over Time")
+                if 'created_utc' in posts_df:
+                    posts_df['date'] = pd.to_datetime(posts_df['created_utc']).dt.date
+                    daily = posts_df.groupby('date').size()
+                    st.line_chart(daily)
             
             st.divider()
             
-            # Top commenters
-            st.subheader("👥 Top Commenters")
-            if 'author' in comments_df:
-                top_authors = comments_df['author'].value_counts().head(10)
-                st.bar_chart(top_authors)
-    
-    with tab5:
+            # Top posts
+            st.subheader("🔥 Top Posts by Score")
+            if 'score' in posts_df:
+                top_posts = posts_df.nlargest(10, 'score')[['title', 'score', 'num_comments', 'post_type', 'created_utc']]
+                st.dataframe(top_posts)
+
+        with tab_map["📈 Analytics"]:
+            st.header("📈 Analytics")
+            
+            # Sentiment Analysis
+            st.subheader("😀 Sentiment Analysis")
+            
+            if st.button("Run Sentiment Analysis"):
+                with st.spinner("Analyzing sentiment..."):
+                    posts_list = posts_df.to_dict('records')
+                    analyzed_posts, sentiment_counts = analyze_posts_sentiment(posts_list)
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Positive", sentiment_counts['positive'], delta=None)
+                    col2.metric("Neutral", sentiment_counts['neutral'], delta=None)
+                    col3.metric("Negative", sentiment_counts['negative'], delta=None)
+                    
+                    # Pie chart
+                    sentiment_df = pd.DataFrame({
+                        'Sentiment': ['Positive', 'Neutral', 'Negative'],
+                        'Count': [sentiment_counts['positive'], sentiment_counts['neutral'], sentiment_counts['negative']]
+                    })
+                    st.bar_chart(sentiment_df.set_index('Sentiment'))
+            
+            st.divider()
+            
+            # Keywords
+            st.subheader("☁️ Top Keywords")
+            texts = posts_df['title'].tolist()
+            if 'selftext' in posts_df:
+                texts.extend(posts_df['selftext'].dropna().tolist())
+            
+            keywords = extract_keywords(texts, top_n=30)
+            
+            if keywords:
+                kw_df = pd.DataFrame(keywords, columns=['Word', 'Count'])
+                st.bar_chart(kw_df.set_index('Word').head(20))
+            
+            st.divider()
+            
+            # Best posting times
+            st.subheader("⏰ Best Posting Times")
+            
+            if 'created_utc' in posts_df:
+                timing_data = find_best_posting_times(posts_df.to_dict('records'))
+                
+                if timing_data['best_hours']:
+                    st.write("**Best Hours to Post:**")
+                    for hour, avg_score in timing_data['best_hours']:
+                        st.write(f"• {hour}:00 - Avg Score: {avg_score:.1f}")
+                
+                if timing_data['best_days']:
+                    st.write("**Best Days to Post:**")
+                    for day, avg_score in timing_data['best_days']:
+                        st.write(f"• {day} - Avg Score: {avg_score:.1f}")
+
+        with tab_map["🔍 Search"]:
+            st.header("🔍 Search Posts")
+            
+            # Search form
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                search_query = st.text_input("Search query", placeholder="Enter keywords...")
+            
+            with col2:
+                min_score = st.number_input("Min Score", min_value=0, value=0)
+            
+            col3, col4, col5 = st.columns(3)
+            
+            with col3:
+                if 'post_type' in posts_df:
+                    post_types = ['All'] + posts_df['post_type'].dropna().unique().tolist()
+                    selected_type = st.selectbox("Post Type", post_types)
+            
+            with col4:
+                if 'author' in posts_df:
+                    authors = ['All'] + posts_df['author'].dropna().unique().tolist()[:50]
+                    selected_author = st.selectbox("Author", authors)
+            
+            with col5:
+                sort_by = st.selectbox("Sort by", ['score', 'num_comments', 'created_utc'])
+            
+            # Search button
+            if st.button("🔍 Search"):
+                filtered = posts_df.copy()
+                
+                if search_query:
+                    mask = filtered['title'].str.contains(search_query, case=False, na=False)
+                    if 'selftext' in filtered:
+                        mask |= filtered['selftext'].str.contains(search_query, case=False, na=False)
+                    filtered = filtered[mask]
+                
+                if min_score > 0:
+                    filtered = filtered[filtered['score'] >= min_score]
+                
+                if selected_type != 'All' and 'post_type' in filtered:
+                    filtered = filtered[filtered['post_type'] == selected_type]
+                
+                if selected_author != 'All' and 'author' in filtered:
+                    filtered = filtered[filtered['author'] == selected_author]
+                
+                filtered = filtered.sort_values(sort_by, ascending=False)
+                
+                st.write(f"Found {len(filtered)} results")
+                st.dataframe(filtered[['title', 'score', 'num_comments', 'post_type', 'author', 'created_utc']].head(50))
+
+        with tab_map["💬 Comments"]:
+            st.header("💬 Comments Analysis")
+            
+            if len(comments_df) == 0:
+                st.warning("No comments data found for this subreddit")
+            else:
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric("Total Comments", len(comments_df))
+                with col2:
+                    avg_score = comments_df['score'].mean() if 'score' in comments_df else 0
+                    st.metric("Avg Score", f"{avg_score:.1f}")
+                with col3:
+                    unique_authors = comments_df['author'].nunique() if 'author' in comments_df else 0
+                    st.metric("Unique Commenters", unique_authors)
+                
+                st.divider()
+                
+                # Top comments
+                st.subheader("🔥 Top Comments by Score")
+                if 'score' in comments_df:
+                    top_comments = comments_df.nlargest(10, 'score')[['body', 'score', 'author', 'created_utc']]
+                    for _, row in top_comments.iterrows():
+                        with st.expander(f"⬆️ {row['score']} - by u/{row['author']}"):
+                            st.write(row['body'][:500])
+                
+                st.divider()
+                
+                # Top commenters
+                st.subheader("👥 Top Commenters")
+                if 'author' in comments_df:
+                    top_authors = comments_df['author'].value_counts().head(10)
+                    st.bar_chart(top_authors)
+
+    # Scraper Tab (Always visible)
+    with tab_map["⚙️ Scraper"]:
+
         st.header("⚙️ Scraper Controls")
         
         # Persistence logic
