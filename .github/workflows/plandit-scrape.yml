@@ -1,0 +1,43 @@
+name: Run plandit scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      subreddit:
+        description: "Subreddit to scrape (without r/ prefix)"
+        required: false
+        default: "FoodNYC"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run scraper
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: |
+          python plandit_scraper.py "${{ inputs.subreddit }}" --limit 1000 --max-retries 5 --retry-wait 60
+
+      - name: Upload scraped data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plandit-data
+          path: |
+            plandit_data_*.json
+            scraper.log
+          if-no-files-found: warn
